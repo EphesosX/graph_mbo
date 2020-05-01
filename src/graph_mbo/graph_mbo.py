@@ -4,6 +4,7 @@ import scipy as sp
 
 def graph_mbo(adj_matrix, normalized=True, signless=True, pseudospectral=True):
     """
+    Run the MBO scheme on a graph.
     Parameters
     ----------
     adj_matrix : np.array
