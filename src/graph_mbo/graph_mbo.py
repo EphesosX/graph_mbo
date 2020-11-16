@@ -1,8 +1,20 @@
 import numpy as np
 import scipy as sp
 
+from .utils import get_fidelity_term, get_initial_state
 
-def graph_mbo(adj_matrix, normalized=True, signless=True, pseudospectral=True):
+
+def graph_mbo(
+    adj_matrix,
+    normalized=True,
+    symmetric=True,
+    signless=True,
+    pseudospectral=True,
+    k=100,
+    num_communities=2,
+    target_size=None,
+    thresh_type="max",
+):
     """
     Run the MBO scheme on a graph.
     Parameters
@@ -15,30 +27,46 @@ def graph_mbo(adj_matrix, normalized=True, signless=True, pseudospectral=True):
         Use the signless graph Laplacian to find eigenvalues if normalized
     pseudospectral : bool
         Use the pseudospectral solver. If false, use CG or LU.
+    k : int
+        Number of eigenvalues to use for pseudospectral
+    num_communities : int
+        Number of communities
+    target_size : list
+        List of desired community sizes when using auction MBO
+    thresh_type : str
+        Type of thresholding to use. "max" takes the max across communities,
+        "auction" does auction MBO
     """
-    k = 100  # Number of eigenvalues to use for pseudospectral
 
-    dt = 0.4
+    dt = 1.8
     min_dt = 1e-4
     niter = 10000
-    n_inner = 10
-
-    num_communities = 5
-    target_size = [1, 1, 1, 1, 1]  # TODO: fix this
-    thresh_type = "flat"
+    n_inner = 1000
 
     degree = np.array(np.sum(adj_matrix, axis=-1)).flatten()
     num_nodes = len(degree)
 
+    k = min(num_nodes, 100)  # Number of eigenvalues to use for pseudospectral
+
+    if target_size is None:
+        target_size = [num_nodes // num_communities for i in range(num_communities)]
+        target_size[-1] = num_nodes - sum(target_size[:-1])
+
     graph_laplacian, degree = sp.sparse.csgraph.laplacian(adj_matrix, return_diag=True)
     degree_diag = sp.sparse.spdiags([degree], [0], num_nodes, num_nodes)
-    if signless:
-        graph_laplacian = 2 * degree_diag - graph_laplacian
-    if normalized:
+    if symmetric:
+        degree_inv = sp.sparse.spdiags([1.0 / degree], [0], num_nodes, num_nodes)
+        graph_laplacian = np.sqrt(degree_inv) @ graph_laplacian @ np.sqrt(degree_inv)
+    elif normalized:
         degree_inv = sp.sparse.spdiags([1.0 / degree], [0], num_nodes, num_nodes)
         graph_laplacian = degree_inv @ graph_laplacian
 
     if pseudospectral:
+        if signless:
+            if normalized:
+                pass
+            else:
+                graph_laplacian = 2 * degree_diag - graph_laplacian
         if normalized:
             D, V = sp.sparse.linalg.eigs(
                 graph_laplacian,
@@ -61,20 +89,24 @@ def graph_mbo(adj_matrix, normalized=True, signless=True, pseudospectral=True):
                 V[:, i] /= np.sqrt(V[:, i].transpose() @ degree_diag @ V[:, i])
 
     last_dt = 0
-    fidelity_coeff = 0
+    fidelity_coeff = 10
 
     """ Initialize state """
-    u = np.zeros((num_nodes, num_communities))
+    u = get_initial_state(num_nodes, num_communities, target_size, type="random")
+    print(u)
+
     last_last_index = u == 1
     last_index = u == 1
 
-    def get_fidelity_term(u):
-        fidelity_term = np.zeros(u.shape)
-        return fidelity_term
-
     def apply_threshold(u, target_size, thresh_type):
-        # TODO: reimplement
-        pass
+        print(u)
+        if thresh_type == "max":
+            """Threshold to the max value across communities. Ignores target_size"""
+            max_idx = np.argmax(u, axis=1)
+            u[:, :] = np.zeros_like(u)
+            u[(range(num_nodes), max_idx)] = 1
+        elif thresh_type == "auction":
+            pass
 
     for n in range(niter):
         dti = dt / n_inner
@@ -130,3 +162,4 @@ def graph_mbo(adj_matrix, normalized=True, signless=True, pseudospectral=True):
 
     if dt >= min_dt:
         print("MBO failed to converge")
+    return u
