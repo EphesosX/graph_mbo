@@ -14,6 +14,11 @@ def graph_mbo(
     num_communities=2,
     target_size=None,
     thresh_type="max",
+    dt=1.8,
+    min_dt=1e-4,
+    max_iter=10000,
+    n_inner=1000,
+    fidelity_coeff=10,
 ):
     """
     Run the MBO scheme on a graph.
@@ -36,12 +41,17 @@ def graph_mbo(
     thresh_type : str
         Type of thresholding to use. "max" takes the max across communities,
         "auction" does auction MBO
+    dt : float
+        Time step between thresholds for the MBO scheme
+    min_dt : float
+        Minimum time step for MBO convergence
+    max_iter : int
+        Maximum number of iterations
+    n_inner : int
+        Number of iterations for the MBO diffusion loop
+    fidelity_coeff : int
+        Coefficient for the fidelity term
     """
-
-    dt = 1.8
-    min_dt = 1e-4
-    niter = 10000
-    n_inner = 1000
 
     degree = np.array(np.sum(adj_matrix, axis=-1)).flatten()
     num_nodes = len(degree)
@@ -89,17 +99,14 @@ def graph_mbo(
                 V[:, i] /= np.sqrt(V[:, i].transpose() @ degree_diag @ V[:, i])
 
     last_dt = 0
-    fidelity_coeff = 10
 
     """ Initialize state """
     u = get_initial_state(num_nodes, num_communities, target_size, type="random")
-    print(u)
 
     last_last_index = u == 1
     last_index = u == 1
 
     def apply_threshold(u, target_size, thresh_type):
-        print(u)
         if thresh_type == "max":
             """Threshold to the max value across communities. Ignores target_size"""
             max_idx = np.argmax(u, axis=1)
@@ -108,7 +115,7 @@ def graph_mbo(
         elif thresh_type == "auction":
             pass
 
-    for n in range(niter):
+    for n in range(max_iter):
         dti = dt / n_inner
         if pseudospectral:
             if normalized:
