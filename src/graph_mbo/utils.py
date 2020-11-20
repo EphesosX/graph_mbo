@@ -19,9 +19,13 @@ def get_initial_state(
     return u
 
 
-def get_fidelity_term(u, type="karate"):
+def get_fidelity_term(u, type="karate", V=None):
     fidelity_term = np.zeros(u.shape)
     if type == "karate":
         fidelity_term[0, 0] = 1
         fidelity_term[-1, -1] = 1
+    elif type == "spectral":
+        # Use the top component of each eigenvector to seed the Clusters
+        idxs = np.argmax(V, axis=0)
+        fidelity_term[idxs, range(u.shape[1])] = 1
     return fidelity_term

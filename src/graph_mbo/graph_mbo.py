@@ -1,5 +1,6 @@
 import numpy as np
 import scipy as sp
+from scipy.linalg import lu_factor, lu_solve
 
 from .utils import get_fidelity_term, get_initial_state
 
@@ -19,6 +20,7 @@ def graph_mbo(
     max_iter=10000,
     n_inner=1000,
     fidelity_coeff=10,
+    fidelity_type="karate",
 ):
     """
     Run the MBO scheme on a graph.
@@ -56,7 +58,7 @@ def graph_mbo(
     degree = np.array(np.sum(adj_matrix, axis=-1)).flatten()
     num_nodes = len(degree)
 
-    k = min(num_nodes, 100)  # Number of eigenvalues to use for pseudospectral
+    k = min(num_nodes, k)  # Number of eigenvalues to use for pseudospectral
 
     if target_size is None:
         target_size = [num_nodes // num_communities for i in range(num_communities)]
@@ -115,6 +117,18 @@ def graph_mbo(
         elif thresh_type == "auction":
             pass
 
+    if fidelity_type == "spectral":
+        fidelity_D, fidelity_V = sp.sparse.linalg.eigsh(
+            graph_laplacian,
+            k=num_communities,
+            v0=np.ones((graph_laplacian.shape[0], 1)),
+            which="SA",
+        )
+        # apply_threshold(fidelity_V, target_size, "max")
+        # return fidelity_V
+    else:
+        fidelity_V = None
+
     for n in range(max_iter):
         dti = dt / n_inner
         if pseudospectral:
@@ -126,26 +140,24 @@ def graph_mbo(
             denom = sp.sparse.spdiags([1 / (1 + dti * D)], [0], k, k)
         else:
             if last_dt != dt:
-                lu, piv = sp.linalg.lu_factor(
-                    sp.sparse.eye(num_nodes) + dti * graph_laplacian
-                )
+                lu, piv = lu_factor(sp.sparse.eye(num_nodes) + dti * graph_laplacian)
 
         for j in range(n_inner):
             """ Solve system (apply CG or pseudospectral) """
             if pseudospectral:
                 a = denom @ (a + fidelity_coeff * dti * d)
                 u = V @ a  # Project back into normal space
-                fidelity_term = get_fidelity_term(u)
+                fidelity_term = get_fidelity_term(u, type=fidelity_type, V=fidelity_V)
                 # Project fidelity term into Hilbert space
                 if normalized:
                     d = V.transpose() @ (degree_diag @ fidelity_term)
                 else:
                     d = V.transpose() @ fidelity_term
             else:
-                fidelity_term = get_fidelity_term(u)
+                fidelity_term = get_fidelity_term(u, type=fidelity_type, V=fidelity_V)
                 u += fidelity_coeff * dti * fidelity_term
                 for i in range(num_communities):
-                    u[:, i] = sp.linalg.lu_solve((lu, piv), u[:, i])
+                    u[:, i] = lu_solve((lu, piv), u[:, i])
 
         """ Apply thresholding """
         apply_threshold(u, target_size, thresh_type)
