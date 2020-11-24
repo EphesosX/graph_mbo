@@ -26,6 +26,7 @@ you through the process.
 
 ## Quick Start
 ```python
+>>> import networkx as nx
 >>> from graph_mbo import graph_mbo
 >>> G = nx.karate_club_graph()
 >>> adj = nx.convert_matrix.to_numpy_matrix(G)
