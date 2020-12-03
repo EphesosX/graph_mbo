@@ -1,8 +1,9 @@
 import numpy as np
 import scipy as sp
 from scipy.linalg import lu_factor, lu_solve
+from scipy.sparse.linalg import eigs, eigsh
 
-from .utils import get_fidelity_term, get_initial_state
+from .utils import apply_threshold, get_fidelity_term, get_initial_state
 
 
 def graph_mbo(
@@ -21,6 +22,8 @@ def graph_mbo(
     n_inner=1000,
     fidelity_coeff=10,
     fidelity_type="karate",
+    initial_state_type="fidelity",
+    modularity=False,
 ):
     """
     Run the MBO scheme on a graph.
@@ -53,12 +56,14 @@ def graph_mbo(
         Number of iterations for the MBO diffusion loop
     fidelity_coeff : int
         Coefficient for the fidelity term
+    modularity : bool
+        Add in the modularity minimization term
     """
 
     degree = np.array(np.sum(adj_matrix, axis=-1)).flatten()
     num_nodes = len(degree)
 
-    k = min(num_nodes, k)  # Number of eigenvalues to use for pseudospectral
+    k = min(num_nodes - 2, k)  # Number of eigenvalues to use for pseudospectral
 
     if target_size is None:
         target_size = [num_nodes // num_communities for i in range(num_communities)]
@@ -69,9 +74,13 @@ def graph_mbo(
     if symmetric:
         degree_inv = sp.sparse.spdiags([1.0 / degree], [0], num_nodes, num_nodes)
         graph_laplacian = np.sqrt(degree_inv) @ graph_laplacian @ np.sqrt(degree_inv)
+        # degree = np.ones(num_nodes)
+        # degree_diag = sp.sparse.spdiags([degree], [0], num_nodes, num_nodes)
     elif normalized:
         degree_inv = sp.sparse.spdiags([1.0 / degree], [0], num_nodes, num_nodes)
         graph_laplacian = degree_inv @ graph_laplacian
+        # degree = np.ones(num_nodes)
+        # degree_diag = sp.sparse.spdiags([degree], [0], num_nodes, num_nodes)
 
     if pseudospectral:
         if signless:
@@ -80,14 +89,14 @@ def graph_mbo(
             else:
                 graph_laplacian = 2 * degree_diag - graph_laplacian
         if normalized:
-            D, V = sp.sparse.linalg.eigs(
+            D, V = eigs(
                 graph_laplacian,
                 k=k,
                 v0=np.ones((graph_laplacian.shape[0], 1)),
                 which="LR" if signless else "SR",
             )
         else:
-            D, V = sp.sparse.linalg.eigsh(
+            D, V = eigsh(
                 graph_laplacian,
                 k=k,
                 v0=np.ones((graph_laplacian.shape[0], 1)),
@@ -102,38 +111,42 @@ def graph_mbo(
 
     last_dt = 0
 
-    """ Initialize state """
-    u = get_initial_state(num_nodes, num_communities, target_size, type="random")
-
-    last_last_index = u == 1
-    last_index = u == 1
-
-    def apply_threshold(u, target_size, thresh_type):
-        if thresh_type == "max":
-            """Threshold to the max value across communities. Ignores target_size"""
-            max_idx = np.argmax(u, axis=1)
-            u[:, :] = np.zeros_like(u)
-            u[(range(num_nodes), max_idx)] = 1
-        elif thresh_type == "auction":
-            pass
-
     if fidelity_type == "spectral":
-        fidelity_D, fidelity_V = sp.sparse.linalg.eigsh(
+        fidelity_D, fidelity_V = eigsh(
             graph_laplacian,
-            k=num_communities,
+            k=num_communities + 1,
             v0=np.ones((graph_laplacian.shape[0], 1)),
             which="SA",
         )
+        fidelity_V = fidelity_V[:, 1:]  # Remove the constant eigenvector
+        fidelity_D = fidelity_D[1:]
         # apply_threshold(fidelity_V, target_size, "max")
         # return fidelity_V
     else:
         fidelity_V = None
 
+    """ Initialize state """
+    u = get_initial_state(
+        num_nodes,
+        num_communities,
+        target_size,
+        type=initial_state_type,
+        fidelity_type=fidelity_type,
+        fidelity_V=fidelity_V,
+    )
+
+    last_last_index = u == 1
+    last_index = u == 1
+
+    if dt / n_inner >= 1.0 / fidelity_coeff:
+        print("Large time step, may not converge")
+
     for n in range(max_iter):
+        # print(n, dt)
         dti = dt / n_inner
         if pseudospectral:
             if normalized:
-                a = V.transpose() @ degree_diag @ u  # Project into Hilbert space
+                a = V.transpose() @ (degree_inv @ u)  # Project into Hilbert space
             else:
                 a = V.transpose() @ u
             d = np.zeros((k, num_communities))
@@ -150,12 +163,29 @@ def graph_mbo(
                 fidelity_term = get_fidelity_term(u, type=fidelity_type, V=fidelity_V)
                 # Project fidelity term into Hilbert space
                 if normalized:
-                    d = V.transpose() @ (degree_diag @ fidelity_term)
+                    d = V.transpose() @ (degree_inv @ fidelity_term)
                 else:
                     d = V.transpose() @ fidelity_term
             else:
                 fidelity_term = get_fidelity_term(u, type=fidelity_type, V=fidelity_V)
                 u += fidelity_coeff * dti * fidelity_term
+                if modularity:
+                    # Add term for modularity
+                    mean_f = np.dot(degree.reshape(1, len(degree)), u) / np.sum(degree)
+                    # print("A")
+                    # print(u)
+                    # print(degree)
+                    # print(mean_f)
+                    # print(np.mean(u, axis=0))
+                    # print(u[0,:])
+                    # print("sum", np.sum(u, axis=0))
+                    # print(degree[0])
+                    # print((2 * dti * degree_diag @ (u - np.ones((u.shape[0], 1)) @ mean_f))[0,:])
+                    # x = input()
+                    # if x == "X":
+                    #     raise Exception()
+                    # @ (np.eye(u.shape[0]) - degree_diag / np.sum(degree))
+                    u += 2 * dti * degree_diag @ (u - mean_f)
                 for i in range(num_communities):
                     u[:, i] = lu_solve((lu, piv), u[:, i])
 
@@ -168,14 +198,14 @@ def graph_mbo(
         last_dt = dt
 
         norm_deviation = sp.linalg.norm(last_index ^ index) / sp.linalg.norm(index)
-        if norm_deviation < 1e-4 or i % 100 == 0:
+        if norm_deviation < 1e-4 or n % 100 == 0:
             if dt < min_dt:
                 break
             else:
-                dt *= 0.4
+                dt *= 0.5
         elif np.sum(last_last_index ^ index) == 0:
             # Going back and forth
-            dt *= 0.4
+            dt *= 0.5
         last_last_index = last_index
         last_index = index
 

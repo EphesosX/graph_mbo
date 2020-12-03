@@ -8,7 +8,9 @@ from graph_mbo import graph_mbo
 def test_karate():
     G = nx.karate_club_graph()
     adj = nx.convert_matrix.to_numpy_matrix(G)
-    u = graph_mbo(adj, pseudospectral=False, symmetric=True, signless=False)
+    u = graph_mbo(
+        adj, pseudospectral=True, symmetric=True, signless=False, normalized=True
+    )
 
     colors = ["#FF0000", "#0000FF"]
     plt.figure()
