@@ -26,10 +26,11 @@ you through the process.
 
 ## Quick Start
 ```python
->>> from graph_mbo import Example
->>> a = Example()
->>> a.get_value()
-10
+>>> import networkx as nx
+>>> from graph_mbo import graph_mbo
+>>> G = nx.karate_club_graph()
+>>> adj = nx.convert_matrix.to_numpy_matrix(G)
+>>> u = graph_mbo(adj, pseudospectral=False, symmetric=True, signless=False)
 
 ```
 
